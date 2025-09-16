@@ -13,7 +13,18 @@ def process_files(file_paths):
     處理檔案清單，執行批量轉換。
     此函數同時被「選擇檔案」和「拖曳」事件呼叫。
     """
-    if not file_paths: # 如果沒有檔案，或檔案格式錯誤
+    if not file_paths:
+        return
+    
+    # 讓使用者選擇儲存資料夾
+    # filedialog.askdirectory() 會打開一個資料夾選擇對話框
+    messagebox.showinfo("準備好轉換", "請選擇一個資料夾來儲存轉換後的檔案。")
+    save_directory = filedialog.askdirectory(title="選擇儲存轉換後檔案的資料夾")
+    
+    # 如果使用者點擊「取消」，函式會回傳空字串
+    if not save_directory:
+        status_label.config(text="已取消選取轉換資料夾")
+        root.update() # 強制更新 GUI 畫面
         return
     
     total_files = len(file_paths)
@@ -29,7 +40,8 @@ def process_files(file_paths):
             status_label.config(text=f"轉換進度：{i}/{total_files} - {os.path.basename(file_path)}")
             root.update() # 強制更新 GUI 畫面
             
-            if convert_single_heic_to_png(file_path):
+            # 將新的儲存路徑傳給轉換函式
+            if convert_single_heic_to_png(file_path, save_directory):
                 successful_conversions += 1
         else:
             messagebox.showinfo("跳過檔案", f"已跳過非 HEIC/HEIF 檔案：{os.path.basename(file_path)}")
@@ -42,16 +54,15 @@ def process_files(file_paths):
         status_label.config(text=f"轉換完成，成功 {successful_conversions} 個，失敗 {total_files - successful_conversions} 個。")
         messagebox.showinfo("轉換完成", f"成功轉換了 {successful_conversions} 個檔案。")
 
-def convert_single_heic_to_png(heic_path):
-    """將單個 HEIC 檔案轉換為 PNG 檔案並儲存在相同目錄下"""
+def convert_single_heic_to_png(heic_path, save_dir):
+    """將單個 HEIC 檔案轉換為 PNG 檔案並儲存到指定目錄下"""
     try:
         # 讀取 HEIC 檔案
         image = Image.open(heic_path)
         
         # 建立 PNG 檔案路徑
-        file_dir = os.path.dirname(heic_path)
         file_name_without_ext = os.path.splitext(os.path.basename(heic_path))[0]
-        png_path = os.path.join(file_dir, f"{file_name_without_ext}.png")
+        png_path = os.path.join(save_dir, f"{file_name_without_ext}.png")
         
         # 儲存為 PNG 檔案
         image.save(png_path, "PNG")
@@ -79,16 +90,17 @@ def handle_drop(event):
 
 # 建立 GUI 視窗
 root = TkinterDnD.Tk()
-root.title("HEIC 轉 PNG 批次轉換器")
-root.geometry("450x300")
+root.title("HEIC 轉 PNG 批量轉換器")
+root.geometry("450x250")
 
 # 建立一個標籤作為拖曳區
 drop_label = tk.Label(
     root,
     text="將 HEIC 檔案拖曳到此處",
-    font=("Helvetica", 12),
+    font=("Helvetica", 16),
     bg="#A0B3C2",
-    relief="flat"
+    relief="solid",
+    bd=2
 )
 drop_label.pack(fill="both", expand=True, padx=20, pady=20)
 
@@ -96,7 +108,6 @@ drop_label.pack(fill="both", expand=True, padx=20, pady=20)
 convert_button = tk.Button(
     root,
     text="或點此選擇 HEIC 檔案",
-    font=("Helvetica", 12),
     command=select_and_convert_files
 )
 convert_button.pack(pady=10)
@@ -112,10 +123,11 @@ status_label.pack(pady=10)
 # 建立作者標籤
 name_label = tk.Label(
     root,
-    text="黃亞文製作",
+    text="黃亞文",
     font=("Helvetica", 12),
 )
-name_label.pack(pady=10)
+# 將 name_label 放在狀態標籤下面
+name_label.pack(pady=5)
 
 # 啟用拖曳功能
 drop_label.drop_target_register(DND_FILES)
