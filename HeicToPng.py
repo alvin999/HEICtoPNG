@@ -1,125 +1,247 @@
+# -*- coding: utf-8 -*-
 import tkinter as tk
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, ttk
 from tkinterdnd2 import DND_FILES, TkinterDnD
 import os
 from PIL import Image
 from pillow_heif import register_heif_opener
+import threading
+import multiprocessing as mp
+import time
+import sys
 
 # 註冊 HEIF/HEIC 檔案的開啟器
 register_heif_opener()
 
-def process_files(file_paths):
-    """
-    處理檔案清單，執行批量轉換。
-    此函數同時被「選擇檔案」和「拖曳」事件呼叫。
-    """
-    if not file_paths: # 如果沒有檔案，或檔案格式錯誤
-        return
-    
-    total_files = len(file_paths)
-    successful_conversions = 0
-    
-    status_label.config(text="開始轉換...")
-    root.update() # 強制更新 GUI 畫面
+# --- 多程序工作函數 (Worker Function) ---
 
-    for i, file_path in enumerate(file_paths, 1):
-        # 檢查檔案是否為 HEIC/HEIF
-        if file_path.lower().endswith(('.heic', '.heif')):
-            # 更新狀態標籤
-            status_label.config(text=f"轉換進度：{i}/{total_files} - {os.path.basename(file_path)}")
-            root.update() # 強制更新 GUI 畫面
-            
-            if convert_single_heic_to_png(file_path):
-                successful_conversions += 1
-        else:
-            messagebox.showinfo("跳過檔案", f"已跳過非 HEIC/HEIF 檔案：{os.path.basename(file_path)}")
-    
-    # 在所有檔案處理完成後，顯示總結訊息
-    if successful_conversions == total_files:
-        status_label.config(text=f"所有 {total_files} 個檔案都已成功轉換！")
-        messagebox.showinfo("轉換完成", f"所有 {total_files} 個檔案都已成功轉換！")
-    else:
-        status_label.config(text=f"轉換完成，成功 {successful_conversions} 個，失敗 {total_files - successful_conversions} 個。")
-        messagebox.showinfo("轉換完成", f"成功轉換了 {successful_conversions} 個檔案。")
-
-def convert_single_heic_to_png(heic_path):
-    """將單個 HEIC 檔案轉換為 PNG 檔案並儲存在相同目錄下"""
+def worker_convert_single_heic_to_png(heic_path):
+    """
+    將單個 HEIC 檔案轉換為 PNG 檔案。此函數將由多程序池呼叫。
+    """
     try:
-        # 讀取 HEIC 檔案
         image = Image.open(heic_path)
-        
-        # 建立 PNG 檔案路徑
         file_dir = os.path.dirname(heic_path)
         file_name_without_ext = os.path.splitext(os.path.basename(heic_path))[0]
         png_path = os.path.join(file_dir, f"{file_name_without_ext}.png")
-        
-        # 儲存為 PNG 檔案
         image.save(png_path, "PNG")
-        
-        return True
-
+        return (True, None, heic_path)
     except Exception as e:
-        messagebox.showerror("轉換失敗", f"無法轉換檔案：{os.path.basename(heic_path)}\n錯誤訊息：{e}")
-        return False
+        return (False, str(e), heic_path)
 
-def select_and_convert_files():
-    """透過檔案選擇對話框處理多個檔案"""
-    file_paths = filedialog.askopenfilenames(
-        title="選擇一個或多個 HEIC 檔案",
-        filetypes=[("HEIC 檔案", "*.heic *.heif")]
-    )
-    # 將回傳的元組轉換為清單，然後交給 process_files 處理
-    process_files(list(file_paths))
+# --- GUI 應用程式類別 (Main Application Class) ---
 
-def handle_drop(event):
-    """處理檔案拖曳事件"""
-    dropped_files = root.tk.splitlist(event.data)
-    # 直接將拖曳的檔案清單交給 process_files 處理
-    process_files(dropped_files)
+class HEICToPNGApp:
+    def __init__(self, master):
+        self.master = master
+        master.title("HEIC 轉 PNG 批次轉換器 (多核心加速版)")
+        master.geometry("450x380")
+        master.config(bg="#f0f0f0")
 
-# 建立 GUI 視窗
-root = TkinterDnD.Tk()
-root.title("HEIC 轉 PNG 批次轉換器")
-root.geometry("450x300")
+        # 內部狀態變數，取代全域變數
+        self.is_converting = False
+        self.is_animating = False
+        self.conversion_results = []
+        self.conversion_thread = None
+        self.progress_text = "等待檔案..."
 
-# 建立一個標籤作為拖曳區
-drop_label = tk.Label(
-    root,
-    text="將 HEIC 檔案拖曳到此處",
-    font=("Helvetica", 12),
-    bg="#A0B3C2",
-    relief="flat"
-)
-drop_label.pack(fill="both", expand=True, padx=20, pady=20)
+        # GUI 元件
+        self._setup_ui()
+        
+    def _setup_ui(self):
+        # 設定樣式
+        try:
+            self.master.option_add("*Font", "Inter 12")
+        except:
+            self.master.option_add("*Font", "Helvetica 12")
 
-# 建立轉換按鈕
-convert_button = tk.Button(
-    root,
-    text="或點此選擇 HEIC 檔案",
-    font=("Helvetica", 12),
-    command=select_and_convert_files
-)
-convert_button.pack(pady=10)
+        # 建立拖曳區
+        self.drop_label = tk.Label(
+            self.master,
+            text="將 HEIC 檔案拖曳到此處\n或點擊下方按鈕",
+            font=("Helvetica", 16, "bold"),
+            fg="#333333",
+            bg="#DDEAF5",
+            relief="groove",
+            bd=2,
+            pady=30,
+            cursor="hand2"
+        )
+        self.drop_label.pack(fill="both", expand=True, padx=20, pady=20)
 
-# 建立狀態標籤
-status_label = tk.Label(
-    root,
-    text="等待檔案...",
-    font=("Helvetica", 12),
-)
-status_label.pack(pady=10)
+        # 建立轉換按鈕
+        self.convert_button = tk.Button(
+            self.master,
+            text="選擇 HEIC 檔案並開始轉換",
+            font=("Helvetica", 12),
+            bg="#4F86F7", 
+            fg="white",
+            activebackground="#3A6CBE",
+            activeforeground="black",
+            relief="raised",
+            bd=3,
+            command=self.select_and_convert_files
+        )
+        self.convert_button.pack(pady=(0, 10), ipadx=10, ipady=5)
 
-# 建立作者標籤
-name_label = tk.Label(
-    root,
-    text="黃亞文製作",
-    font=("Helvetica", 12),
-)
-name_label.pack(pady=10)
+        # 建立進度條
+        self.progress_bar = ttk.Progressbar(
+            self.master,
+            orient="horizontal",
+            length=400,
+            mode="determinate"
+        )
+        self.progress_bar.pack(pady=(5, 10), padx=20) 
 
-# 啟用拖曳功能
-drop_label.drop_target_register(DND_FILES)
-drop_label.dnd_bind("<<Drop>>", handle_drop)
+        # 建立狀態標籤
+        self.status_label = tk.Label(
+            self.master,
+            text=self.progress_text,
+            font=("Helvetica", 12),
+            bg="#f0f0f0",
+            fg="#555555"
+        )
+        self.status_label.pack(pady=5)
 
-# 執行 GUI 主迴圈
-root.mainloop()
+        # 啟用拖曳功能
+        self.drop_label.drop_target_register(DND_FILES)
+        self.drop_label.dnd_bind("<<Drop>>", self.handle_drop)
+
+    # --- GUI 事件處理函式 ---
+
+    def select_and_convert_files(self):
+        if self.is_converting:
+            messagebox.showwarning("忙碌中", "請等待當前批次轉換完成。")
+            return
+        
+        self.status_label.config(text="正在初始化...")
+        self.progress_text = "正在初始化..."
+        self.progress_bar.config(value=0)
+        self.master.update()
+            
+        file_paths = filedialog.askopenfilenames(
+            title="選擇一個或多個 HEIC 檔案",
+            filetypes=[("圖片檔案", "*.heic *.heif"), ("所有檔案", "*.*")]
+        )
+        if file_paths:
+            self.start_conversion_thread(list(file_paths))
+        else:
+            self._reset_state()
+
+    def handle_drop(self, event):
+        if self.is_converting:
+            messagebox.showwarning("忙碌中", "請等待當前批次轉換完成。")
+            return
+        
+        self.status_label.config(text="正在初始化...")
+        self.progress_text = "正在初始化..."
+        self.progress_bar.config(value=0)
+        self.master.update()
+            
+        dropped_files = self.master.tk.splitlist(event.data)
+        
+        if dropped_files:
+            self.start_conversion_thread(dropped_files)
+        else:
+            self._reset_state()
+            
+    def _reset_state(self):
+        self.is_converting = False
+        self.is_animating = False
+        self.progress_text = "等待檔案..."
+        self.status_label.config(text=self.progress_text)
+        self.progress_bar.config(value=0)
+
+    # --- 執行緒管理函式 ---
+
+    def start_conversion_thread(self, file_paths):
+        heic_paths = [
+            p for p in file_paths
+            if p.lower().endswith(('.heic', '.heif')) and os.path.exists(p)
+        ]
+
+        skipped_count = len(file_paths) - len(heic_paths)
+        if skipped_count > 0:
+            self.master.after(0, lambda: messagebox.showinfo("跳過檔案", f"已跳過 {skipped_count} 個非 HEIC/HEIF 檔案。"))
+
+        if not heic_paths:
+            self.master.after(0, lambda: self.status_label.config(text="沒有 HEIC 檔案需要轉換。"))
+            self.is_converting = False
+            return
+
+        self.is_converting = True
+        self.is_animating = True
+        total_files = len(heic_paths)
+        
+        self.master.after(0, self.animate_spinner, 0)
+
+        self.conversion_thread = threading.Thread(
+            target=self.run_multiprocess_conversion, 
+            args=(heic_paths, total_files)
+        )
+        self.conversion_thread.daemon = True
+        self.conversion_thread.start()
+
+    def run_multiprocess_conversion(self, heic_paths, total_files):
+        num_processes = min(mp.cpu_count(), 4) 
+        
+        with mp.Pool(processes=num_processes) as pool:
+            tasks = [(p,) for p in heic_paths]
+            async_result = pool.starmap_async(worker_convert_single_heic_to_png, tasks)
+            
+            while not async_result.ready():
+                current_completed = total_files - async_result._number_left
+                self.master.after(0, self.update_status_and_spinner, current_completed, total_files)
+                time.sleep(0.1)
+
+            self.conversion_results = async_result.get()
+        
+        self.master.after(0, self.finalize_gui_update, self.conversion_results, total_files)
+        
+    def animate_spinner(self, spinner_index):
+        if not self.is_animating:
+            return
+
+        spinner_chars = ['|', '/', '-', '\\']
+        self.status_label.config(text=f"{self.progress_text} {spinner_chars[spinner_index]}")
+
+        next_index = (spinner_index + 1) % len(spinner_chars)
+        self.master.after(100, self.animate_spinner, next_index)
+        
+    def update_status_and_spinner(self, current_completed, total_files):
+        percent_complete = int((current_completed / total_files) * 100)
+        self.progress_bar.config(value=percent_complete)
+        self.progress_text = f"總進度：{percent_complete}% ({current_completed}/{total_files} 個檔案已完成)"
+
+    def finalize_gui_update(self, results, total_files):
+        self.is_converting = False
+        self.is_animating = False
+        
+        successful_count = sum(1 for success, _, _ in results if success)
+        failed_count = total_files - successful_count
+        
+        self.progress_bar.config(value=100)
+        
+        final_message = f"轉換完成！\n成功：{successful_count} 個\n失敗：{failed_count} 個"
+        
+        self.status_label.config(text=f"轉換完成，成功 {successful_count} 個，失敗 {failed_count} 個。")
+        messagebox.showinfo("轉換完成", final_message)
+
+        if failed_count > 0:
+            error_messages = "\n".join([
+                f"- 檔案 {os.path.basename(path)} 失敗: {err}"
+                for success, err, path in results if not success
+            ])
+            messagebox.showwarning("部分轉換失敗", f"以下檔案轉換失敗：\n{error_messages[:500]}...")
+            
+        self.master.after(1500, self._reset_state)
+
+# --- 主程式進入點 ---
+
+if __name__ == '__main__':
+    if sys.platform.startswith('win'):
+        mp.freeze_support()
+        
+    root = TkinterDnD.Tk()
+    app = HEICToPNGApp(root)
+    root.mainloop()
