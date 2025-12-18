@@ -1,0 +1,124 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*' # 當推送 v 開頭的 tag 時觸發 (例如 v1.0.0)
+  workflow_dispatch: # 允許手動觸發
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Build Windows Executable
+    runs-on: windows-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pillow pillow-heif tkinterdnd2 pyinstaller
+
+      - name: Build Executable
+        # 使用 --collect-all tkinterdnd2 確保包含拖放功能的依賴資源
+        # --noconsole 隱藏終端機視窗, --onefile 打包成單一檔案
+        run: |
+          pyinstaller --noconsole --onefile --name "HeicToPng" --collect-all tkinterdnd2 HeicToPng.py
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: dist/HeicToPng.exe
+          generate_release_notes: true
+
+  build-macos:
+    name: Build macOS
+    runs-on: macos-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pillow pillow-heif tkinterdnd2 pyinstaller
+
+      - name: Build Executable
+        run: |
+          pyinstaller --noconsole --onefile --name "HeicToPng" --collect-all tkinterdnd2 HeicToPng.py
+          # 將 macOS 執行檔壓縮，以保留權限並方便下載
+          cd dist
+          zip HeicToPng-macOS.zip HeicToPng
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: dist/HeicToPng-macOS.zip
+          generate_release_notes: true
+
+  build-linux:
+    name: Build Linux AppImage
+    runs-on: ubuntu-20.04
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y python3-tk fuse
+          python -m pip install --upgrade pip
+          pip install pillow pillow-heif tkinterdnd2 pyinstaller
+
+      - name: Build Executable
+        run: pyinstaller --noconsole --onefile --name "HeicToPng" --collect-all tkinterdnd2 HeicToPng.py
+
+      - name: Create AppImage
+        run: |
+          mkdir -p AppDir/usr/bin
+          cp dist/HeicToPng AppDir/AppRun
+          chmod +x AppDir/AppRun
+          
+          # 下載圖示 (使用 Python logo 作為範例)
+          wget -O AppDir/icon.png https://www.python.org/static/community_logos/python-powered-h-50x65.png
+          
+          # 建立 .desktop 檔案
+          cat > AppDir/heictopng.desktop <<EOF
+          [Desktop Entry]
+          Name=HeicToPng
+          Exec=AppRun
+          Icon=icon
+          Type=Application
+          Categories=Utility;
+          EOF
+          
+          # 下載並執行 appimagetool
+          wget -q https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x appimagetool-x86_64.AppImage
+          ARCH=x86_64 ./appimagetool-x86_64.AppImage AppDir HeicToPng-Linux-x86_64.AppImage
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: HeicToPng-Linux-x86_64.AppImage
+          generate_release_notes: true
