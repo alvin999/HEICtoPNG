@@ -45,14 +45,6 @@ jobs:
           name: HeicToPng-Windows
           path: dist/HeicToPng.exe
 
-      - name: Create Release
-        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
-        uses: softprops/action-gh-release@v1
-        with:
-          files: dist/HeicToPng.exe
-          generate_release_notes: true
-          tag_name: ${{ inputs.version }}
-
   build-macos:
     name: Build macOS
     runs-on: macos-latest
@@ -84,18 +76,10 @@ jobs:
           name: HeicToPng-macOS
           path: dist/HeicToPng-macOS.zip
 
-      - name: Create Release
-        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
-        uses: softprops/action-gh-release@v1
-        with:
-          files: dist/HeicToPng-macOS.zip
-          generate_release_notes: true
-          tag_name: ${{ inputs.version }}
-
   build-linux:
     name: Build Linux AppImage
-    runs-on: ubuntu-20.04
-    
+    runs-on: ubuntu-latest
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -144,10 +128,26 @@ jobs:
           name: HeicToPng-Linux
           path: HeicToPng-Linux-x86_64.AppImage
 
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    # 此任務需要等待所有平台的建置都成功完成
+    needs: [build-windows, build-macos, build-linux]
+    # 只有在推送 tag 或手動觸發時才執行
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
       - name: Create Release
-        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
         uses: softprops/action-gh-release@v1
         with:
-          files: HeicToPng-Linux-x86_64.AppImage
+          # 根據觸發方式決定 tag 名稱
+          tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
           generate_release_notes: true
-          tag_name: ${{ inputs.version }}
+          files: |
+            artifacts/HeicToPng-Windows/HeicToPng.exe
+            artifacts/HeicToPng-macOS/HeicToPng-macOS.zip
+            artifacts/HeicToPng-Linux/HeicToPng-Linux-x86_64.AppImage

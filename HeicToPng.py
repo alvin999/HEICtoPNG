@@ -16,6 +16,8 @@ register_heif_opener()
 # --- 多程序工作函數 (Worker Function) ---
 
 def worker_convert_single_heic_to_png(heic_path):
+    # 此函數定義在類別外部，以確保它可以被子程序正確地序列化 (pickling)。
+    # multiprocessing 在跨程序傳遞任務時需要對目標函數進行序列化，而頂層函數 (top-level function) 是最容易被序列化的。
     """
     將單個 HEIC 檔案轉換為 PNG 檔案。此函數將由多程序池呼叫。
     """
@@ -176,21 +178,27 @@ class HEICToPNGApp:
         self.master.after(0, self.animate_spinner, 0)
 
         self.conversion_thread = threading.Thread(
-            target=self.run_multiprocess_conversion, 
-            args=(heic_paths, total_files)
+            target=self.run_multiprocess_conversion,
+            args=(heic_paths, total_files) # 建立一個獨立的執行緒來管理多程序轉換任務，避免長時間操作阻塞 GUI 主執行緒，從而防止視窗無回應。
         )
         self.conversion_thread.daemon = True
         self.conversion_thread.start()
 
     def run_multiprocess_conversion(self, heic_paths, total_files):
+        # 圖片轉換是 CPU 密集型任務。此處使用 multiprocessing 來繞過 Python 的全域直譯器鎖 (GIL)，
+        # 實現真正的平行處理，以充分利用多核心 CPU 的效能。
         num_processes = min(mp.cpu_count(), 4) 
         
         with mp.Pool(processes=num_processes) as pool:
             tasks = [(p,) for p in heic_paths]
+            # 使用 starmap_async 以非同步方式提交任務。
+            # 這允許當前的管理執行緒可以不被阻塞，並能透過迴圈持續監控轉換進度。
             async_result = pool.starmap_async(worker_convert_single_heic_to_png, tasks)
             
             while not async_result.ready():
                 current_completed = total_files - async_result._number_left
+                # Tkinter 的 GUI 元件不是執行緒安全的 (thread-safe)。所有 UI 的更新操作都必須透過
+                # self.master.after() 方法，將其排程到主執行緒中執行，以避免競爭條件和程式崩潰。
                 self.master.after(0, self.update_status_and_spinner, current_completed, total_files)
                 time.sleep(0.1)
 
@@ -239,6 +247,9 @@ class HEICToPNGApp:
 # --- 主程式進入點 ---
 
 if __name__ == '__main__':
+    # 在 Windows 平台上，使用 multiprocessing 必須將啟動子程序的程式碼放在 if __name__ == '__main__': 區塊內。
+    # 這是因為 Windows 缺乏 fork()，子程序會重新 import 主腳本，此舉可防止無限遞迴地創建子程序。
+    # freeze_support() 則是用於支援打包成獨立執行檔 (例如使用 PyInstaller)。
     if sys.platform.startswith('win'):
         mp.freeze_support()
         
