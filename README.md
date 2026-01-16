@@ -15,6 +15,7 @@
 * **語言：** Python 3.x
 * **GUI 函式庫：** `tkinter` 和 `tkinterdnd2`
 * **影像處理：** `Pillow` 和 `pillow-heif`
+* **多工處理：** `multiprocessing` 和 `threading`
 
 ## 如何執行
 
